@@ -1,0 +1,316 @@
+using System.Collections;
+using UnityEngine;
+
+namespace ChronoArchive.FormationBooks
+{
+    public class FormationBookController : MonoBehaviour
+    {
+        private enum BookState
+        {
+            OnShelf,
+            SelectedOnShelf,
+            Moving,
+            Inspecting,
+            ReaderOpen
+        }
+
+        [Header("Data")]
+        public FormationBookData formationData;
+
+        [Header("Visual State Objects")]
+        public GameObject hoverGlow;
+        public GameObject newGlow;
+
+        [Header("Selection Material Backup")]
+        public Renderer[] selectedTintRenderers;
+        public Color selectedTintColor = new Color(1f, 0.85f, 0.25f, 1f);
+
+        [Header("Hotspots")]
+        public GameObject rightOpenHotspot;
+        public GameObject leftReturnHotspot;
+
+        [Header("UI")]
+        public FormationBookTooltipUI tooltipUI;
+        public FormationBookReaderUI readerUI;
+
+        [Header("Movement")]
+        public Transform inspectPosition;
+        public float moveDuration = 0.45f;
+        public float selectedScaleMultiplier = 1.05f;
+
+        private Vector3 shelfPosition;
+        private Quaternion shelfRotation;
+        private Vector3 shelfScale;
+
+        private Color[] originalRendererColors;
+        private BookState currentState = BookState.OnShelf;
+        private Coroutine moveRoutine;
+
+        private void Start()
+        {
+            shelfPosition = transform.position;
+            shelfRotation = transform.rotation;
+            shelfScale = transform.localScale;
+
+            StoreOriginalRendererColors();
+
+            ClearShelfSelectionVisuals();
+            SetHotspots(false);
+        }
+
+        private void StoreOriginalRendererColors()
+        {
+            if (selectedTintRenderers == null || selectedTintRenderers.Length == 0)
+            {
+                return;
+            }
+
+            originalRendererColors = new Color[selectedTintRenderers.Length];
+
+            for (int i = 0; i < selectedTintRenderers.Length; i++)
+            {
+                if (selectedTintRenderers[i] != null)
+                {
+                    originalRendererColors[i] = selectedTintRenderers[i].material.color;
+                }
+            }
+        }
+
+        private void OnMouseDown()
+        {
+            if (currentState == BookState.OnShelf)
+            {
+                SelectBookOnShelf();
+                return;
+            }
+
+            if (currentState == BookState.SelectedOnShelf)
+            {
+                PullOutFromShelf();
+                return;
+            }
+        }
+
+        private void SelectBookOnShelf()
+        {
+            currentState = BookState.SelectedOnShelf;
+
+            if (hoverGlow != null)
+            {
+                hoverGlow.SetActive(true);
+            }
+
+            if (newGlow != null)
+            {
+                newGlow.SetActive(false);
+            }
+
+            ApplySelectedTint(true);
+            transform.localScale = shelfScale * selectedScaleMultiplier;
+
+            if (tooltipUI != null)
+            {
+                tooltipUI.Show(formationData);
+            }
+
+            Debug.Log($"Selected formation book on shelf: {name}");
+        }
+
+        public void DeselectBookOnShelf()
+        {
+            if (currentState != BookState.SelectedOnShelf)
+            {
+                return;
+            }
+
+            currentState = BookState.OnShelf;
+            ClearShelfSelectionVisuals();
+
+            Debug.Log($"Deselected formation book on shelf: {name}");
+        }
+
+        private void ClearShelfSelectionVisuals()
+        {
+            if (hoverGlow != null)
+            {
+                hoverGlow.SetActive(false);
+            }
+
+            ApplySelectedTint(false);
+            transform.localScale = shelfScale;
+
+            if (tooltipUI != null)
+            {
+                tooltipUI.Hide();
+            }
+        }
+
+        private void ApplySelectedTint(bool shouldTint)
+        {
+            if (selectedTintRenderers == null || selectedTintRenderers.Length == 0)
+            {
+                return;
+            }
+
+            for (int i = 0; i < selectedTintRenderers.Length; i++)
+            {
+                if (selectedTintRenderers[i] == null)
+                {
+                    continue;
+                }
+
+                if (shouldTint)
+                {
+                    selectedTintRenderers[i].material.color = selectedTintColor;
+                }
+                else if (originalRendererColors != null && i < originalRendererColors.Length)
+                {
+                    selectedTintRenderers[i].material.color = originalRendererColors[i];
+                }
+            }
+        }
+
+        private void SetHotspots(bool areEnabled)
+        {
+            if (rightOpenHotspot != null)
+            {
+                rightOpenHotspot.SetActive(areEnabled);
+            }
+
+            if (leftReturnHotspot != null)
+            {
+                leftReturnHotspot.SetActive(areEnabled);
+            }
+        }
+
+        public void PullOutFromShelf()
+        {
+            if (currentState != BookState.SelectedOnShelf)
+            {
+                return;
+            }
+
+            if (inspectPosition == null)
+            {
+                Debug.LogWarning("No inspect position assigned on FormationBookController.");
+                return;
+            }
+
+            currentState = BookState.Moving;
+
+            ClearShelfSelectionVisuals();
+            SetHotspots(false);
+
+            if (newGlow != null)
+            {
+                newGlow.SetActive(false);
+            }
+
+            StartMove(
+                inspectPosition.position,
+                inspectPosition.rotation,
+                () =>
+                {
+                    currentState = BookState.Inspecting;
+                    SetHotspots(true);
+                }
+            );
+        }
+
+        public void OpenReader()
+        {
+            if (currentState != BookState.Inspecting)
+            {
+                return;
+            }
+
+            currentState = BookState.ReaderOpen;
+            SetHotspots(false);
+
+            if (tooltipUI != null)
+            {
+                tooltipUI.Hide();
+            }
+
+            if (readerUI != null)
+            {
+                readerUI.Open(formationData, this);
+            }
+            else
+            {
+                Debug.LogWarning("No reader UI assigned on FormationBookController.");
+            }
+        }
+
+        public void ReturnToShelf()
+        {
+            if (currentState == BookState.Moving)
+            {
+                return;
+            }
+
+            currentState = BookState.Moving;
+
+            ClearShelfSelectionVisuals();
+            SetHotspots(false);
+
+            if (readerUI != null)
+            {
+                readerUI.CloseOnly();
+            }
+
+            StartMove(
+                shelfPosition,
+                shelfRotation,
+                () =>
+                {
+                    currentState = BookState.OnShelf;
+                    transform.localScale = shelfScale;
+                    ClearShelfSelectionVisuals();
+                    SetHotspots(false);
+                }
+            );
+        }
+
+        private void StartMove(Vector3 targetPosition, Quaternion targetRotation, System.Action onComplete)
+        {
+            if (moveRoutine != null)
+            {
+                StopCoroutine(moveRoutine);
+            }
+
+            moveRoutine = StartCoroutine(MoveToTarget(targetPosition, targetRotation, onComplete));
+        }
+
+        private IEnumerator MoveToTarget(Vector3 targetPosition, Quaternion targetRotation, System.Action onComplete)
+        {
+            Vector3 startPosition = transform.position;
+            Quaternion startRotation = transform.rotation;
+
+            float elapsed = 0f;
+
+            while (elapsed < moveDuration)
+            {
+                elapsed += Time.deltaTime;
+
+                float t = Mathf.Clamp01(elapsed / moveDuration);
+                float eased = t * t * (3f - 2f * t);
+
+                transform.position = Vector3.Lerp(startPosition, targetPosition, eased);
+                transform.rotation = Quaternion.Slerp(startRotation, targetRotation, eased);
+
+                yield return null;
+            }
+
+            transform.position = targetPosition;
+            transform.rotation = targetRotation;
+
+            moveRoutine = null;
+
+            if (onComplete != null)
+            {
+                onComplete.Invoke();
+            }
+        }
+    }
+}
